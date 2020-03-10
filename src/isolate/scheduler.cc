@@ -115,8 +115,9 @@ auto Scheduler::Implementation::WakeIsolate(std::shared_ptr<IsolateEnvironment> 
 void Scheduler::Implementation::IncrementUvRef() {
 	if (++default_scheduler.uv_ref_count == 1) {
 		// Only the default thread should be able to reach this branch
-		assert(Executor::IsDefaultThread());
-		uv_ref(reinterpret_cast<uv_handle_t*>(default_scheduler.uv_async));
+		if(Executor::IsDefaultThread()) {
+            uv_ref(reinterpret_cast<uv_handle_t*>(default_scheduler.uv_async));
+		}
 	}
 }
 
