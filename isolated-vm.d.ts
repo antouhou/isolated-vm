@@ -290,7 +290,7 @@ declare module "isolated-vm" {
 	/**
 	 * A instance of Reference is a pointer to a value stored in any isolate.
 	 */
-	export class Reference<T> {
+	export class Reference<T = any> {
 		private __ivm_reference: undefined;
 		constructor(value: T);
 
@@ -335,6 +335,13 @@ declare module "isolated-vm" {
 		 * After calling this method all attempts to access the reference will throw an error.
 		 */
 		release(): void;
+
+		/**
+		 * Delete a property from this reference, as if using `delete reference[property]`
+		 */
+		 delete(property: string): Promise<boolean>;
+		 deleteIgnored(property: string): void;
+		 deleteSync(property: string): boolean;
 
 		/**
 		 * Will access a reference as if using reference[property] and return a reference to that value.
@@ -397,7 +404,7 @@ declare module "isolated-vm" {
 	 * Instances of this class represent some value that is stored outside of any v8
 	 * isolate. This value can then be quickly copied into any isolate.
 	 */
-	export class ExternalCopy<T> {
+	export class ExternalCopy<T = any> {
 		private __ivm_external_copy: undefined;
 
 		/**

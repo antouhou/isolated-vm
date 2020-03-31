@@ -40,6 +40,7 @@ too old.
 * Ubuntu users should run: `sudo apt-get install g++ build-essential`
 * Alpine users should run: `sudo apk add python make g++`
 * Amazon Linux AMI users should run: `sudo yum install gcc72 gcc72-c++`
+* Arch Linux users should run: `sudo pacman -S make gcc python`
 
 WHO IS USING ISOLATED-VM
 ------------------------
@@ -52,6 +53,9 @@ for several days at a time.
 just static resources. They are using isolated-vm to run globally distributed applications, where
 each application may have wildly different traffic patterns.
 
+* [Algolia](https://www.algolia.com) - Algolia is a Search as a Service provider. They use
+`isolated-vm` to power their [Custom Crawler](https://www.algolia.com/products/crawler/) product,
+which allows them to safely execute user-provided code for content extraction.
 
 API DOCUMENTATION
 -----------------
@@ -348,6 +352,14 @@ Releases this reference. If you're passing around a lot of references between is
 release the references when you are done. Otherwise you may run into issues with isolates running
 out of memory because other isolates haven't garbage collected recently. After calling this method
 all attempts to access the reference will throw an error.
+
+##### `reference.delete(property)` *[Promise](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)*
+##### `reference.deleteIgnored(property)`
+##### `reference.deleteSync(property)`
+* `property` *[transferable]* - The property to access on this object.
+* **return** `true` or `false`
+
+Delete a property from this reference, as if using `delete reference[property]`
 
 ##### `reference.get(property, options)` *[Promise](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)*
 ##### `reference.getSync(property, options)`

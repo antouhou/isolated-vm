@@ -51,6 +51,30 @@ class ExternalCopyTemplate : public ExternalCopy {
 };
 
 /**
+ * BigInt data
+ */
+#if V8_AT_LEAST(6, 9, 258)
+// Added in 477df066dbb
+struct ExternalCopyBigInt : public ExternalCopy {
+	public:
+		explicit ExternalCopyBigInt(Local<BigInt> value) {
+			int word_count = value->WordCount();
+			words.resize(word_count);
+			value->ToWordsArray(&sign_bit, &word_count, words.data());
+		}
+
+		auto CopyInto(bool /*transfer_in*/ = false) -> Local<Value> final {
+			return Unmaybe(BigInt::NewFromWords(
+				Isolate::GetCurrent()->GetCurrentContext(), sign_bit, words.size(), words.data()));
+		}
+
+	private:
+		int sign_bit = 0;
+		std::vector<uint64_t> words;
+};
+#endif
+
+/**
  * null and undefined
  */
 class ExternalCopyNull : public ExternalCopy {
@@ -129,6 +153,10 @@ std::unique_ptr<ExternalCopy> ExternalCopy::Copy(
 			type = ViewType::Float32;
 		} else if (view->IsFloat64Array()) {
 			type = ViewType::Float64;
+		} else if (view->IsBigInt64Array()) {
+			type = ViewType::BigInt64Array;
+		} else if (view->IsBigUint64Array()) {
+			type = ViewType::BigUint64Array;
 		} else if (view->IsDataView()) {
 			type = ViewType::DataView;
 		} else {
@@ -187,6 +215,10 @@ namespace {
 				// This handles Infinity, -Infinity, NaN
 				return std::make_unique<ExternalCopyTemplate<Number, double>>(value);
 			}
+#if V8_AT_LEAST(6, 9, 258)
+		} else if (value->IsBigInt()) {
+			return std::make_unique<ExternalCopyBigInt>(value.As<BigInt>());
+#endif
 		} else if (value->IsBoolean()) {
 			return std::make_unique<ExternalCopyTemplate<Boolean, bool>>(value);
 		} else if (value->IsNull()) {
@@ -476,6 +508,20 @@ Local<Value> ExternalCopyArrayBuffer::CopyInto(bool transfer_in) {
 /**
  * ExternalCopySharedArrayBuffer implementation
  */
+#if V8_AT_LEAST(7, 9, 69)
+
+// This much needed feature was added in v8 55c48820
+ExternalCopySharedArrayBuffer::ExternalCopySharedArrayBuffer(const v8::Local<v8::SharedArrayBuffer>& handle) :
+		ExternalCopy{static_cast<int>(handle->ByteLength())} {
+	backing_store = handle->GetBackingStore();
+}
+
+Local<Value> ExternalCopySharedArrayBuffer::CopyInto(bool /*transfer_in*/) {
+	return SharedArrayBuffer::New(Isolate::GetCurrent(), backing_store);
+}
+
+#else
+
 ExternalCopySharedArrayBuffer::ExternalCopySharedArrayBuffer(const v8::Local<v8::SharedArrayBuffer>& handle) :
 		ExternalCopyBytes{handle->ByteLength() + sizeof(ExternalCopySharedArrayBuffer), [&]() -> std::shared_ptr<void> {
 			// Inline lambda generates std::shared_ptr<void> for ExternalCopyBytes ctor. Similar to
@@ -512,11 +558,13 @@ Local<Value> ExternalCopySharedArrayBuffer::CopyInto(bool /*transfer_in*/) {
 	return array_buffer;
 }
 
+#endif
+
 /**
  * ExternalCopyArrayBufferView implementation
  */
 ExternalCopyArrayBufferView::ExternalCopyArrayBufferView(
-	std::unique_ptr<ExternalCopyBytes> buffer,
+	std::unique_ptr<ExternalCopyAnyArrayBuffer> buffer,
 	ViewType type, size_t byte_offset, size_t byte_length
 ) :
 	ExternalCopy(sizeof(ExternalCopyArrayBufferView)),
