@@ -5,7 +5,7 @@
 			'Common': {
 				'cflags_cc': [ '-std=c++14', '-g', '-Wno-unknown-pragmas' ],
 				'cflags_cc!': [ '-fno-exceptions' ],
-				'include_dirs': [ './src' ],
+				'include_dirs': [ './src', './vendor' ],
 				'xcode_settings': {
 					'GCC_ENABLE_CPP_EXCEPTIONS': 'YES',
 					'GCC_GENERATE_DEBUGGING_SYMBOLS': 'YES',
@@ -61,8 +61,9 @@
 			'sources': [
 				'src/external_copy/external_copy.cc',
 				'src/external_copy/serializer.cc',
+				'src/external_copy/serializer_nortti.cc',
 				'src/external_copy/string.cc',
-				'src/isolate/allocator.cc',
+				'src/isolate/allocator_nortti.cc',
 				'src/isolate/environment.cc',
 				'src/isolate/executor.cc',
 				'src/isolate/holder.cc',
@@ -86,12 +87,20 @@
 				'src/module/session_handle.cc',
 				'src/module/transferable.cc',
 			],
-			'dependencies': [ 'nortti' ],
+			'conditions': [
+				[ 'OS != "win"', {
+					'dependencies': [ 'nortti' ],
+					'sources/': [ [ 'exclude', '_nortti\\.cc$'] ],
+				} ],
+			],
 		},
 		{
 			'target_name': 'nortti',
 			'type': 'static_library',
-			'sources': [ 'src/external_copy/serializer_nortti.cc' ],
+			'sources': [
+				'src/external_copy/serializer_nortti.cc',
+				'src/isolate/allocator_nortti.cc',
+			],
 		},
 	],
 }

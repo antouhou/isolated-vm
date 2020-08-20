@@ -7,7 +7,7 @@ PlatformDelegate delegate;
 #if IVM_USE_PLATFORM_DELEGATE_HACK
 
 void PlatformDelegate::InitializeDelegate() {
-	auto node_platform = reinterpret_cast<node::MultiIsolatePlatform*>(v8::internal::V8::GetCurrentPlatform());
+	auto* node_platform = reinterpret_cast<node::MultiIsolatePlatform*>(v8::internal::V8::GetCurrentPlatform());
 	delegate = PlatformDelegate{node_platform};
 	v8::V8::ShutdownPlatform();
 	v8::V8::InitializePlatform(&delegate);
@@ -39,9 +39,5 @@ void PlatformDelegate::UnregisterIsolate(v8::Isolate* isolate) {
 }
 
 #endif
-
-void PlatformDelegate::CallIdleOnForegroundThread(v8::Isolate* isolate, v8::IdleTask* task) {
-	node_platform->CallIdleOnForegroundThread(isolate, task);
-}
 
 } // namespace ivm

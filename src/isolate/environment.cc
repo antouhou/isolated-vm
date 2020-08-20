@@ -15,7 +15,7 @@
 
 #ifdef __APPLE__
 #include <pthread.h>
-static void* GetStackBase() {
+static auto GetStackBase() -> void* {
 	pthread_t self = pthread_self();
 	return (void*)((char*)pthread_get_stackaddr_np(self) - pthread_get_stacksize_np(self));
 }
@@ -89,26 +89,26 @@ void IsolateEnvironment::OOMErrorCallback(const char* location, bool is_heap_oom
 }
 
 void IsolateEnvironment::PromiseRejectCallback(PromiseRejectMessage rejection) {
-	auto that = IsolateEnvironment::GetCurrent();
+	auto* that = IsolateEnvironment::GetCurrent();
 	assert(that->isolate == Isolate::GetCurrent());
 	that->rejected_promise_error.Reset(that->isolate, rejection.GetValue());
 }
 
-void IsolateEnvironment::MarkSweepCompactEpilogue(Isolate* isolate, GCType gc_type, GCCallbackFlags gc_flags, void* data) {
-	auto that = static_cast<IsolateEnvironment*>(data);
+void IsolateEnvironment::MarkSweepCompactEpilogue(Isolate* isolate, GCType /*gc_type*/, GCCallbackFlags gc_flags, void* data) {
+	auto* that = static_cast<IsolateEnvironment*>(data);
 	HeapStatistics heap;
 	that->isolate->GetHeapStatistics(&heap);
 	size_t total_memory = heap.used_heap_size() + that->extra_allocated_memory;
 	size_t memory_limit = that->memory_limit + that->misc_memory_size;
 	if (total_memory > memory_limit) {
-		if (gc_flags & (GCCallbackFlags::kGCCallbackFlagCollectAllAvailableGarbage | GCCallbackFlags::kGCCallbackFlagForced)) {
-			that->Terminate();
-			that->hit_memory_limit = true;
-		} else {
+		if ((gc_flags & (GCCallbackFlags::kGCCallbackFlagCollectAllAvailableGarbage | GCCallbackFlags::kGCCallbackFlagForced)) == 0) {
 			// Force full garbage collection
 			that->RequestMemoryPressureNotification(MemoryPressureLevel::kCritical, true);
+		} else {
+			that->Terminate();
+			that->hit_memory_limit = true;
 		}
-	} else if (!(gc_flags & GCCallbackFlags::kGCCallbackFlagCollectAllAvailableGarbage)) {
+	} else if ((gc_flags & GCCallbackFlags::kGCCallbackFlagCollectAllAvailableGarbage) == 0) {
 		if (that->did_adjust_heap_limit) {
 			// There is also `AutomaticallyRestoreInitialHeapLimit` introduced in v8 7.3.411 / 93283bf04
 			// but it seems less effective than this ratcheting strategy.
@@ -127,10 +127,10 @@ void IsolateEnvironment::MarkSweepCompactEpilogue(Isolate* isolate, GCType gc_ty
 	}
 }
 
-size_t IsolateEnvironment::NearHeapLimitCallback(void* data, size_t current_heap_limit, size_t /* initial_heap_limit */) {
+auto IsolateEnvironment::NearHeapLimitCallback(void* data, size_t current_heap_limit, size_t /*initial_heap_limit*/) -> size_t {
 	// This callback will temporarily give the v8 vm up to an extra 1 GB of memory to prevent the
 	// application from crashing.
-	auto that = static_cast<IsolateEnvironment*>(data);
+	auto* that = static_cast<IsolateEnvironment*>(data);
 	that->did_adjust_heap_limit = true;
 	HeapStatistics heap;
 	that->isolate->GetHeapStatistics(&heap);
@@ -163,7 +163,7 @@ void IsolateEnvironment::RequestMemoryPressureNotification(MemoryPressureLevel m
 	}
 }
 
-void IsolateEnvironment::MemoryPressureInterrupt(Isolate* /* isolate */, void* data) {
+void IsolateEnvironment::MemoryPressureInterrupt(Isolate* /*isolate*/, void* data) {
 	static_cast<IsolateEnvironment*>(data)->CheckMemoryPressure();
 }
 
@@ -268,9 +268,9 @@ void IsolateEnvironment::IsolateCtor(Isolate* isolate, Local<Context> context) {
 	nodejs_isolate = true;
 }
 
-void IsolateEnvironment::IsolateCtor(size_t memory_limit_in_mb, shared_ptr<void> snapshot_blob, size_t snapshot_length) {
+void IsolateEnvironment::IsolateCtor(size_t memory_limit_in_mb, shared_ptr<BackingStore> snapshot_blob, size_t snapshot_length) {
 	memory_limit = memory_limit_in_mb * 1024 * 1024;
-	allocator_ptr = std::make_unique<LimitedAllocator>(*this, memory_limit);
+	allocator_ptr = std::make_shared<LimitedAllocator>(*this, memory_limit);
 	snapshot_blob_ptr = std::move(snapshot_blob);
 	nodejs_isolate = false;
 
@@ -300,10 +300,15 @@ void IsolateEnvironment::IsolateCtor(size_t memory_limit_in_mb, shared_ptr<void>
 	// Build isolate from create params
 	Isolate::CreateParams create_params;
 	create_params.constraints = rc;
+#if V8_AT_LEAST(8, 0, 60)
+	// 6b0a9535
+	create_params.array_buffer_allocator_shared = allocator_ptr;
+#else
 	create_params.array_buffer_allocator = allocator_ptr.get();
+#endif
 	if (snapshot_blob_ptr) {
 		create_params.snapshot_blob = &startup_data;
-		startup_data.data = reinterpret_cast<char*>(snapshot_blob_ptr.get());
+		startup_data.data = reinterpret_cast<char*>(snapshot_blob_ptr->Data());
 		startup_data.raw_size = snapshot_length;
 	}
 	task_runner = std::make_shared<IsolateTaskRunner>(holder.lock()->GetIsolate());
@@ -315,6 +320,11 @@ void IsolateEnvironment::IsolateCtor(size_t memory_limit_in_mb, shared_ptr<void>
 	isolate = Isolate::New(create_params);
 	PlatformDelegate::RegisterIsolate(isolate, &scheduler);
 #endif
+
+#if NODE_MODULE_VERSION >= 79 && !V8_AT_LEAST(8, 0, 60)
+	isolate->SetArrayBufferAllocatorShared(allocator_ptr);
+#endif
+
 	// Workaround for bug in snapshot deserializer in v8 in nodejs v10.x
 	isolate->SetHostImportModuleDynamicallyCallback(nullptr);
 	isolate->SetOOMErrorHandler(OOMErrorCallback);
@@ -359,7 +369,7 @@ IsolateEnvironment::~IsolateEnvironment() {
 				ii = isolates.erase(ii);
 			}
 		}
-		for (auto& holder : isolates) {
+		for (const auto & holder : isolates) {
 			auto ref = holder.lock();
 			if (ref) {
 				ref->ReleaseAndJoin();
@@ -414,7 +424,7 @@ IsolateEnvironment::~IsolateEnvironment() {
 static void DeserializeInternalFieldsCallback(Local<Object> /*holder*/, int /*index*/, StartupData /*payload*/, void* /*data*/) {
 }
 
-Local<Context> IsolateEnvironment::NewContext() {
+auto IsolateEnvironment::NewContext() -> Local<Context> {
 #if NODE_MODULE_OR_V8_AT_LEAST(64, 6, 2, 193)
 	return Context::New(isolate, nullptr, {}, {}, &DeserializeInternalFieldsCallback);
 #else
@@ -437,15 +447,23 @@ auto IsolateEnvironment::TaskEpilogue() -> std::unique_ptr<ExternalCopy> {
 	return {};
 }
 
+auto IsolateEnvironment::GetLimitedAllocator() const -> LimitedAllocator* {
+	if (nodejs_isolate) {
+		return nullptr;
+	} else {
+		return static_cast<LimitedAllocator*>(allocator_ptr.get());
+	}
+}
+
 void IsolateEnvironment::EnableInspectorAgent() {
 	inspector_agent = std::make_unique<InspectorAgent>(*this);
 }
 
-InspectorAgent* IsolateEnvironment::GetInspectorAgent() const {
+auto IsolateEnvironment::GetInspectorAgent() const -> InspectorAgent* {
 	return inspector_agent.get();
 }
 
-std::chrono::nanoseconds IsolateEnvironment::GetCpuTime() {
+auto IsolateEnvironment::GetCpuTime() -> std::chrono::nanoseconds {
 	std::lock_guard<std::mutex> lock(executor.timer_mutex);
 	std::chrono::nanoseconds time = executor.cpu_time;
 	if (executor.cpu_timer != nullptr) {
@@ -454,7 +472,7 @@ std::chrono::nanoseconds IsolateEnvironment::GetCpuTime() {
 	return time;
 }
 
-std::chrono::nanoseconds IsolateEnvironment::GetWallTime() {
+auto IsolateEnvironment::GetWallTime() -> std::chrono::nanoseconds {
 	std::lock_guard<std::mutex> lock(executor.timer_mutex);
 	std::chrono::nanoseconds time = executor.wall_time;
 	if (executor.wall_timer != nullptr) {
