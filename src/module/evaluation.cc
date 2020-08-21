@@ -44,13 +44,13 @@ CodeCompilerHolder::CodeCompilerHolder(Local<String> code_handle, MaybeLocal<Obj
 	auto maybe_cached_data = ReadOption<MaybeLocal<Object>>(maybe_options, StringTable::Get().cachedData, {});
 	Local<Object> cached_data;
 	if (maybe_cached_data.ToLocal(&cached_data)) {
-		auto copy_handle = ClassHandle::Unwrap<ExternalCopyHandle>(cached_data);
+		auto* copy_handle = ClassHandle::Unwrap<ExternalCopyHandle>(cached_data);
 		if (copy_handle != nullptr) {
 			ExternalCopyArrayBuffer* copy_ptr = dynamic_cast<ExternalCopyArrayBuffer*>(copy_handle->GetValue().get());
 			if (copy_ptr != nullptr) {
 				supplied_cached_data = true;
 				cached_data_in = copy_ptr->Acquire();
-				cached_data_in_size = copy_ptr->Length();
+				cached_data_in_size = cached_data_in->ByteLength();
 			}
 		}
 		if (!cached_data_in) {
@@ -61,7 +61,7 @@ CodeCompilerHolder::CodeCompilerHolder(Local<String> code_handle, MaybeLocal<Obj
 
 auto CodeCompilerHolder::GetCachedData() const -> std::unique_ptr<ScriptCompiler::CachedData> {
 	if (cached_data_in) {
-		return std::make_unique<ScriptCompiler::CachedData>(reinterpret_cast<const uint8_t*>(cached_data_in.get()), cached_data_in_size);
+		return std::make_unique<ScriptCompiler::CachedData>(reinterpret_cast<const uint8_t*>(cached_data_in->Data()), cached_data_in_size);
 	}
 	return {};
 }

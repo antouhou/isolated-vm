@@ -38,7 +38,7 @@ class IsolateHolder {
 
 // This needs to be separate from IsolateHolder because v8 holds references to this indefinitely and
 // we don't want it keeping the isolate alive.
-class IsolateTaskRunner : public TaskRunner {
+class IsolateTaskRunner final : public TaskRunner {
 	public:
 		explicit IsolateTaskRunner(const std::shared_ptr<IsolateEnvironment>& isolate) : weak_env{isolate} {}
 		IsolateTaskRunner(const IsolateTaskRunner&) = delete;
@@ -48,6 +48,7 @@ class IsolateTaskRunner : public TaskRunner {
 		// Methods for v8::TaskRunner
 		void PostTask(std::unique_ptr<v8::Task> task) final;
 		void PostDelayedTask(std::unique_ptr<v8::Task> task, double delay_in_seconds) final;
+		void PostNonNestableTask(std::unique_ptr<v8::Task> task) final { PostTask(std::move(task)); }
 
 	private:
 		std::weak_ptr<IsolateEnvironment> weak_env;
