@@ -94,6 +94,20 @@ void IsolateEnvironment::PromiseRejectCallback(PromiseRejectMessage rejection) {
 	that->rejected_promise_error.Reset(that->isolate, rejection.GetValue());
 }
 
+#ifdef USE_CODE_GEN_CALLBACK
+auto IsolateEnvironment::CodeGenCallback(Local<Context> /*context*/, Local<Value> source) -> ModifyCodeGenerationFromStringsResult {
+	auto* that = IsolateEnvironment::GetCurrent();
+	// This heuristic could be improved by looking up how much `timeout` this isolate has left and
+	// returning early in some cases
+	ModifyCodeGenerationFromStringsResult result;
+	if (source->IsString() && source.As<String>()->Length() > static_cast<int>(that->memory_limit / 8)) {
+		return result;
+	}
+	result.codegen_allowed = true;
+	return result;
+}
+#endif
+
 void IsolateEnvironment::MarkSweepCompactEpilogue(Isolate* isolate, GCType /*gc_type*/, GCCallbackFlags gc_flags, void* data) {
 	auto* that = static_cast<IsolateEnvironment*>(data);
 	HeapStatistics heap;
@@ -221,7 +235,7 @@ void IsolateEnvironment::AsyncEntry() {
 		while (!tasks.empty()) {
 			tasks.front()->Run();
 			tasks.pop();
-			if (hit_memory_limit) {
+			if (terminated) {
 				return;
 			}
 			CheckMemoryPressure();
@@ -327,8 +341,13 @@ void IsolateEnvironment::IsolateCtor(size_t memory_limit_in_mb, shared_ptr<Backi
 
 	// Workaround for bug in snapshot deserializer in v8 in nodejs v10.x
 	isolate->SetHostImportModuleDynamicallyCallback(nullptr);
+
+	// Various callbacks
 	isolate->SetOOMErrorHandler(OOMErrorCallback);
 	isolate->SetPromiseRejectCallback(PromiseRejectCallback);
+#ifdef USE_CODE_GEN_CALLBACK
+	isolate->SetModifyCodeGenerationFromStringsCallback(CodeGenCallback);
+#endif
 
 	// Add GC callbacks
 	isolate->AddGCEpilogueCallback(MarkSweepCompactEpilogue, static_cast<void*>(this), GCType::kGCTypeMarkSweepCompact);
@@ -353,27 +372,21 @@ void IsolateEnvironment::IsolateCtor(size_t memory_limit_in_mb, shared_ptr<Backi
 	isolate->DiscardThreadSpecificMetadata();
 
 	// Save reference to this isolate in the default isolate
-	Executor::GetDefaultEnvironment().owned_isolates->write()->insert(holder);
+	Executor::GetDefaultEnvironment().owned_isolates->write()->insert({ dispose_wait, holder });
 }
 
 IsolateEnvironment::~IsolateEnvironment() {
 	if (nodejs_isolate) {
 		// Throw away all owned isolates when the root one dies
 		auto isolates = *owned_isolates->read(); // copy
-		for (auto ii = isolates.begin(); ii != isolates.end(); ) {
-			auto ref = ii->lock();
+		for (const auto& handle : isolates) {
+			auto ref = handle.holder.lock();
 			if (ref) {
 				ref->Dispose();
-				++ii;
-			} else {
-				ii = isolates.erase(ii);
 			}
 		}
-		for (const auto & holder : isolates) {
-			auto ref = holder.lock();
-			if (ref) {
-				ref->ReleaseAndJoin();
-			}
+		for (const auto& handle : isolates) {
+			handle.dispose_wait->Join();
 		}
 	} else {
 		{
@@ -409,27 +422,26 @@ IsolateEnvironment::~IsolateEnvironment() {
 		// Unregister from Platform
 		PlatformDelegate::UnregisterIsolate(isolate);
 		// Unreference from default isolate
-		executor.default_executor.env.owned_isolates->write()->erase(holder);
+		executor.default_executor.env.owned_isolates->write()->erase({ dispose_wait, holder });
 	}
 	// Send notification that this isolate is totally disposed
-	{
-		auto ref = holder.lock();
-		if (ref) {
-			ref->state.write()->is_disposed = true;
-			ref->cv.notify_all();
-		}
-	}
+	dispose_wait->IsolateDidDispose();
 }
 
 static void DeserializeInternalFieldsCallback(Local<Object> /*holder*/, int /*index*/, StartupData /*payload*/, void* /*data*/) {
 }
 
 auto IsolateEnvironment::NewContext() -> Local<Context> {
+	auto context =
 #if NODE_MODULE_OR_V8_AT_LEAST(64, 6, 2, 193)
-	return Context::New(isolate, nullptr, {}, {}, &DeserializeInternalFieldsCallback);
+	Context::New(isolate, nullptr, {}, {}, &DeserializeInternalFieldsCallback);
 #else
-	return Context::New(isolate);
+	Context::New(isolate);
 #endif
+#ifdef USE_CODE_GEN_CALLBACK
+	context->AllowCodeGenerationFromStrings(false);
+#endif
+	return context;
 }
 
 auto IsolateEnvironment::TaskEpilogue() -> std::unique_ptr<ExternalCopy> {
@@ -485,7 +497,7 @@ void IsolateEnvironment::Terminate() {
 	assert(!nodejs_isolate);
 	terminated = true;
 	{
-		Scheduler::Lock lock(scheduler);
+		Scheduler::Lock lock{scheduler};
 		if (inspector_agent) {
 			inspector_agent->Terminate();
 		}
@@ -493,7 +505,7 @@ void IsolateEnvironment::Terminate() {
 	isolate->TerminateExecution();
 	auto ref = holder.lock();
 	if (ref) {
-		ref->state.write()->isolate.reset();
+		ref->isolate.write()->reset();
 	}
 }
 
